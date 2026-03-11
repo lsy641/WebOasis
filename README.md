@@ -1,7 +1,7 @@
 <div align="center">
-<img src="docs/img/log3.png" alt="WebOasis Logo" >
+<img src="docs/img/log2.png" alt="WebOasis Logo" >
 
-Handling "Any site. Any page. Any UI. Any complexity" for your web tasks.
+Handling "Any site. Any page. Any UI. Any complexity" for your web tasks and completing web tasks like a human.
 
 [![GitHub](https://img.shields.io/badge/GitHub-WebOasis-181717?logo=github)](https://github.com/lsy641/WebOasis)
 [![License](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://github.com/lsy641/WebOasis/blob/main/LICENSE)
