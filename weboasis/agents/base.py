@@ -69,15 +69,24 @@ class BaseAgent(ABC):
 
 class Message_Center:
     """Message controller for agents"""
-    messages: List[Message] = []
+    
+    def __init__(self, max_history: int = 50):
+        """
+        Initialize the message center.
+        
+        Args:
+            max_history: Maximum number of messages to keep in history (default: 50)
+        """
+        self.messages: List[Message] = []
+        self.max_history = max_history
     
     def add_message(self, message: Message):
         return self.messages.append(message)
         
     def get_messages(self):
         # only return the deep copy of the messages
-        # return the last 50 messages
-        return copy.deepcopy(self.messages)[-50:]
+        # return the last max_history messages
+        return copy.deepcopy(self.messages)[-self.max_history:]
     
     def add_system_message(self, first_message: Message = None, last_message: Message = None):
         # Because the system message depends on the role, we only allow real-time construction and don't allow any system message actually stored in the message center.
@@ -109,13 +118,18 @@ class WebAgent(BaseAgent):
         
     def observe(self, web_manager: SyncWEBManager): 
         web_manager.hide_developer_elements()
+        
+        # 0. Check for reCAPTCHA and pause if detected
+        if hasattr(web_manager, 'pause_for_recaptcha'):
+            web_manager.pause_for_recaptcha()
+        
         # 1. Mark elements
         count = web_manager.mark_elements()
         
         # 2. Extract accessibility tree
         accessibility_tree = web_manager.get_accessibility_tree(max_depth=10)
         
-        logger.debug(f"accessibility_tree: {accessibility_tree}")
+        # logger.debug(f"accessibility_tree: {accessibility_tree}")
         
         if count == 0:
             logger.error(
@@ -123,8 +137,8 @@ class WebAgent(BaseAgent):
             )
             
         # 3. Identify interactive elements
-        interactive_elements = web_manager.identify_interactive_elements() 
-        web_manager.outline_interactive_elements(interactive_elements)
+        interactive_elements = web_manager.identify_interactive_elements(max_retries=2) 
+        web_manager.outline_interactive_elements(interactive_elements, max_retries=2, retry_delay=1000)
         
         # 4. Take screenshot
         screenshot = web_manager.screenshot(path=None)
@@ -158,7 +172,7 @@ class WebAgent(BaseAgent):
         action_space_desc = act_book.get_action_space_description(preferred_method="test_id")
         # logger.debug(f"action_space_desc: {action_space_desc}")
         
-        logger.debug(f"action_space_desc: {action_space_desc}")
+        # logger.debug(f"action_space_desc: {action_space_desc}")
         
         # 2.1 get the accessibility tree
         accessibility_tree = observation.metadata["accessibility_tree"]
@@ -218,18 +232,29 @@ class WebAgent(BaseAgent):
             except Exception as e:
                 logger.error(f"Error in removing outline elements: {e}")
             
-            message_center.add_message(Message(name="web_agent", content=[{"type": "text", "text": f'The executed action is: {response}. Success: {result.success}'}], time=time.time()))          
+            # Build status suffix with error information
+            status = "success" if result.success else "failed"
+            status_suffix = f" (status: {status}"
+            if result.error:
+                status_suffix += f", error: {result.error}"
+            status_suffix += ")"
+            
+            executed_text = f"The executed action is: {response}{status_suffix}"
+            message_center.add_message(Message(name="web_agent", content=[{"type": "text", "text": executed_text}], time=time.time()))          
             return {
                         'operation': parsed_action.operation_name,
                         'parameters': parsed_action.parameters,
                         'raw_response': response,
                         'confidence': parsed_action.confidence,
                         'parser': parsed_action.parser_type,
-                        'success': result.success
+                        'success': result.success,
+                        'error': result.error,
+                        'executed_text': executed_text
                     }
         else:
             logger.error(f"Failed to parse action: {response}")
-            message_center.add_message(Message(name="web_agent", content=[{"type": "text", "text": f'Failed to parse action: {response}'}], time=time.time()))
+            executed_text = f"Failed to parse action: {response} (status: failed, error: parsing failed)"
+            message_center.add_message(Message(name="web_agent", content=[{"type": "text", "text": executed_text}], time=time.time()))
             
             return {
                 'raw_response': response,
@@ -238,6 +263,8 @@ class WebAgent(BaseAgent):
                 'parameters': None,
                 'confidence': None,
                 'parser': None,
+                'error': 'parsing failed',
+                'executed_text': executed_text
             }
 
 
@@ -293,8 +320,10 @@ class RoleAgent(BaseAgent):
         
         # 7. convert the messages to the list of messages for the openai client
         messages = messages_to_list(messages, mode="openai", name="role_agent")
-        
-        logger.info(f"messages: {json.dumps(messages_to_str_without_image(messages), indent=1)}")
+
+        # logger.info(f"messages: {json.dumps(messages_to_str_without_image(messages), indent=1)}")
+
+
         try:
             response = client.chat.completions.create(model=model, messages=messages)
             response = response.choices[0].message.content
