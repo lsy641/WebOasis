@@ -13,16 +13,42 @@ logger = logging.getLogger(__name__)
 
 class DualAgent:  
     
-    def __init__(self, client, model, act_book: ActBookController, web_manager="playwright", test_id_attribute: str = "data-testid", log_dir: str = None, hard_coded_goal: Callable[[int], str] = None, verbose: bool = True):
+    def __init__(self, client, model, act_book: ActBookController, web_manager="playwright", test_id_attribute: str = "data-testid", log_dir: str = None, hard_coded_goal: Callable[[int], str] = None, verbose: bool = True, max_message_history: int = 50, extra_http_headers: dict = None, proxy: dict = None, user_agent: str = None):
+        """
+        Initialize the DualAgent.
         
+        Args:
+            client: OpenAI client instance
+            model: Model name to use
+            act_book: ActBookController instance
+            web_manager: Web manager type ("playwright" or "selenium")
+            test_id_attribute: Attribute name for test IDs
+            log_dir: Directory for logs
+            hard_coded_goal: Function that returns goals for hard-coded steps
+            verbose: Whether to print verbose output
+            max_message_history: Maximum number of messages to keep in history
+            extra_http_headers: Dictionary of additional HTTP headers (only for playwright)
+            proxy: Proxy configuration dict with 'server' key (only for playwright)
+            user_agent: Custom user agent string (only for playwright)
+        """
         # Create the appropriate web manager based on the parameter
         if web_manager == "playwright":
-            self._web_manager = SyncPlaywrightManager(test_id_attribute=test_id_attribute)
+            self._web_manager = SyncPlaywrightManager(
+                test_id_attribute=test_id_attribute,
+                extra_http_headers=extra_http_headers,
+                proxy=proxy,
+                user_agent=user_agent
+            )
         elif web_manager == "selenium":
             self._web_manager = SyncSeleniumManager(test_id_attribute=test_id_attribute)
         else:
             # Default to playwright
-            self._web_manager = SyncPlaywrightManager(test_id_attribute=test_id_attribute)
+            self._web_manager = SyncPlaywrightManager(
+                test_id_attribute=test_id_attribute,
+                extra_http_headers=extra_http_headers,
+                proxy=proxy,
+                user_agent=user_agent
+            )
         
         self._vlm_client = client
         
@@ -31,7 +57,7 @@ class DualAgent:
         self.role_agent = RoleAgent(name="role_agent", verbose=verbose)
         self.web_agent = WebAgent(name="web_agent", verbose=verbose)
         # a message center to store the messages for multi-agent communication
-        self.message_center = Message_Center()
+        self.message_center = Message_Center(max_history=max_message_history)
         # an act book to store the actions for the web agent to execute
         self.act_book = act_book
         # a function to generate the goal for the web agent to execute
@@ -104,8 +130,10 @@ class DualAgent:
             
             # 4. web agent act based on the goal
             web_agent_action = self.web_agent.act(self.web_manager, self.act_book, self.client, self.model, web_agent_observation, goal, self.message_center)
-            self.save_web_action_log(f"{web_agent_action['raw_response']} \n  {web_agent_action['operation']}({str(web_agent_action['parameters'])}) \n success: {str(web_agent_action['success'])}", "web_agent")
-        
+            # Use executed_text if available, otherwise fall back to detailed format
+            log_text = web_agent_action.get('executed_text') or f"{web_agent_action['raw_response']} \n  {web_agent_action['operation']}({str(web_agent_action['parameters'])}) \n success: {str(web_agent_action['success'])}"
+            self.save_web_action_log(log_text, "web_agent")
+            logger.debug(f"web_agent_action: {log_text}")
             # 5. update the step
             self._step_idx += 1
             self.role_agent.step_idx += 1
