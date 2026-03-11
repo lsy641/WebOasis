@@ -113,11 +113,17 @@ class SimpleParser:
         if not operation_match:
             return None
         
-        operation_name = operation_match.group(1)
+        operation_name = operation_match.group(1).lower()  # Normalize to lowercase
         
-        # Check if operation is available
-        if operation_name not in available_operations:
+        # Check if operation is available (also normalize available_operations to lowercase for comparison)
+        # Create a mapping from lowercase to original case
+        operation_map = {op.lower(): op for op in available_operations}
+        if operation_name not in operation_map:
+            logger.warning(f"Operation '{operation_name}' not found in available operations: {available_operations}")
             return None
+        
+        # Use the original case from available_operations
+        operation_name = operation_map[operation_name]
         # Find the opening parenthesis (should be right after the operation name)
         open_paren = cleaned_response.find('(', operation_match.start())
         if open_paren == -1:
