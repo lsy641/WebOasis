@@ -168,8 +168,58 @@ class ActBookController:
         return self._registry.get_operation_info()
     
     def get_operation(self, name: str) -> Optional[Type[Operation]]:
-        """Get an operation class by name."""
-        return self._registry.get_operation(name)
+        """Get an operation class by name. Only auto-registers if the operation is not found and not already registered."""
+        # First, try to get the operation from the registry
+        operation = self._registry.get_operation(name)
+        if operation:
+            return operation
+        
+        # Operation not found - check if we should auto-register
+        # Only auto-register if there are no operations registered at all
+        # This prevents repeated auto-registration when operations are already registered
+        if len(self._registry.list_operations()) == 0 and not self._auto_registered:
+            # Temporarily auto-register to find the operation
+            self.auto_register_operations()
+            operation = self._registry.get_operation(name)
+            # Clear after getting the operation since we only needed it temporarily
+            self._registry.clear()
+            self._auto_registered = False
+        
+        return operation
+    
+    def get_operations(self, names: List[str]) -> Dict[str, Type[Operation]]:
+        """Get operation classes by names from the registry."""
+        return self._registry.get_operations(names)
+    
+    def get_operation_classes_by_names(self, names: List[str]) -> Dict[str, Type[Operation]]:
+        """
+        Get operation classes by names without requiring them to be registered.
+        Uses auto-register to temporarily make all operations available.
+        
+        Args:
+            names: List of operation names (e.g., ['click', 'navigate', 'type'])
+            
+        Returns:
+            Dictionary mapping operation names (lowercase) to operation classes
+        """
+        # Check if operations are already registered
+        had_existing_operations = len(self._registry.list_operations()) > 0
+        was_auto_registered = self._auto_registered
+        
+        # Temporarily auto-register all operations to make them accessible
+        if not self._auto_registered:
+            self.auto_register_operations()
+        
+        # Get the requested operations from the registry
+        operations = self._registry.get_operations(names)
+        
+        # Clear registry if we just auto-registered and there were no existing operations
+        # This prevents clearing operations that were manually registered
+        if not was_auto_registered and not had_existing_operations:
+            self._registry.clear()
+            self._auto_registered = False
+        
+        return operations
     
     def execute_operation(self, operation_name: str, automator: BrowserAutomator, **kwargs) -> OperationResult:
         """
