@@ -25,7 +25,7 @@ WebOasis is a framework for building AI-driven web agents on real, complex websi
 
 ## Updates
 
-<div style="max-height: 280px; overflow-y: auto; padding: 8px 0;">
+<div style="max-height: 100px; overflow-y: auto; padding: 8px 0;">
 
 - **Proxy, user-agent, headers**: New parameters for custom proxy, user-agent, and request headers in both Playwright and Selenium managers
 - **reCAPTCHA**: Detection and handling for reCAPTCHA challenges
