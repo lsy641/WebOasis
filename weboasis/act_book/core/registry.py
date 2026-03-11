@@ -50,6 +50,19 @@ class OperationRegistry:
         return cls._operations.get(name.lower())
     
     @classmethod
+    def get_operations(cls, names: Optional[List[str]] = None) -> Dict[str, Type[Operation]]:
+        """Get operation classes by names. If names is None, returns all operations."""
+        if names is None:
+            return cls._operations.copy()
+        
+        result = {}
+        for name in names:
+            operation = cls._operations.get(name.lower())
+            if operation:
+                result[name.lower()] = operation
+        return result
+    
+    @classmethod
     def list_operations(cls) -> List[str]:
         """List all registered operation names."""
         return list(cls._operations.keys())
