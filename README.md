@@ -1,5 +1,5 @@
 <div align="center">
-<img src="docs/img/weboasis_logo.png" alt="WebOasis Logo" >
+<img src="docs/img/log4.png" alt="WebOasis Logo" >
 
 Handling "Any site. Any page. Any UI. Any complexity" for your web tasks.
 
