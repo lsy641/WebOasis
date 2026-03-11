@@ -23,6 +23,25 @@ Handling "Any site. Any page. Any UI. Any complexity" for your web tasks.
 
 WebOasis is a framework for building AI-driven web agents on real, complex websites. 
 
+## Updates
+
+<div style="max-height: 280px; overflow-y: auto; padding: 8px 0;">
+
+- **Proxy, user-agent, headers**: New parameters for custom proxy, user-agent, and request headers in both Playwright and Selenium managers
+- **reCAPTCHA**: Detection and handling for reCAPTCHA challenges
+- **Safe close**: Improved resource cleanup on browser/manager shutdown
+- **Interactive class patterns**: Configurable patterns for identifying interactive elements
+- **frame_mark_elements.js**: Page stability checks, chat-interface handling, and DOM element marking
+- **identify_interactive_elements.js**: Expanded interactive element detection
+- **Max history messages**: Configurable limit on conversation history
+- **Execution outcomes**: Richer execution feedback in agent messages
+- **Accessibility tree**: Accessibility information included in agent observations
+- **Registry updates**: Improved operation registration flow
+- **Demo**: Example of adding custom operations
+- **Lowercase operations**: Case-insensitive operation extraction in the parser
+
+</div>
+
 ## Features
 - **Any site. Any page. Any UI. Any complexity.** 
 Robust handling of dynamic, highly interactive pages. You focus on research—no brittle low‑level UI hacking. If you run into a tricky page the agent can't yet handle, please open a [request](https://github.com/lsy641/WebOasis/issues/new) and we'll help.
@@ -191,8 +210,25 @@ WebOasis/
 └── scripts/demo.py                # Minimal runnable example
 ```
 
+
+
 ## Citation
 
+If you use WebOasis in your research, please cite:
+
+```bibtex
+@software{siyang_liu_2025_17052503,
+  author       = {Siyang Liu},
+  title        = {lsy641/WebOasis: 0.1.5},
+  month        = sep,
+  year         = 2025,
+  publisher    = {Zenodo},
+  version      = {0.1.5},
+  doi          = {10.5281/zenodo.17052503},
+  url          = {https://doi.org/10.5281/zenodo.17052503},
+  swhid        = {swh:1:dir:3e01a9805d7e6f1f92703629987b90fbc07a3218;origin=https://doi.org/10.5281/zenodo.17052502;visit=swh:1:snp:5d80fd402b00b67f790a56c6532a88a6e9300f88;anchor=swh:1:rel:d8fbac11afe389ce44a306513eefc372905d900b;path=lsy641-WebOasis-3bec1d9},
+}
+```
 
 ## License
 
