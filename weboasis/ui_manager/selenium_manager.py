@@ -500,6 +500,299 @@ class SyncSeleniumManager(SyncWEBManager, SeleniumAutomator):
         except Exception as e:
             logger.error(f"Error in make_self_intro: {e}")
     
+    def detect_recaptcha(self) -> bool:
+        """
+        Detect if reCAPTCHA is present by checking marked elements (elements with test IDs).
+        Only checks elements that have been marked by frame_mark_elements.js.
+        
+        Returns:
+            bool: True if reCAPTCHA is detected in marked elements, False otherwise
+        """
+        try:
+            # Check for reCAPTCHA in marked elements only, and verify if it's already completed
+            has_recaptcha = self._driver.execute_script(f"""
+                (function(testIdAttr) {{
+                    // Helper function to check if element is visible
+                    function isElementVisible(el) {{
+                        if (!el) return false;
+                        
+                        const style = window.getComputedStyle(el);
+                        if (style.display === 'none' || 
+                            style.visibility === 'hidden' || 
+                            style.opacity === '0') {{
+                            return false;
+                        }}
+                        
+                        const rect = el.getBoundingClientRect();
+                        // Check if element is on screen (not off-screen)
+                        if (rect.width === 0 && rect.height === 0) {{
+                            return false;
+                        }}
+                        
+                        // Check if element is positioned off-screen (like hidden badges)
+                        const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+                        const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+                        
+                        // If element is completely outside viewport, it's not visible
+                        if (rect.right < 0 || rect.bottom < 0 || 
+                            rect.left > viewportWidth || rect.top > viewportHeight) {{
+                            return false;
+                        }}
+                        
+                        return true;
+                    }}
+                    
+                    // Helper function to check if reCAPTCHA is already verified/completed
+                    // This checks the entire document/frame, not just within the element
+                    function isRecaptchaVerified(el) {{
+                        // First, check if challenge iframe is visible (means NOT verified)
+                        // The challenge iframe appears when reCAPTCHA needs to be completed
+                        const challengeIframes = document.querySelectorAll('iframe[title*="recaptcha challenge"], iframe[title*="challenge expires"]');
+                        for (let i = 0; i < challengeIframes.length; i++) {{
+                            const iframe = challengeIframes[i];
+                            const style = window.getComputedStyle(iframe.parentElement || iframe);
+                            // If challenge iframe is visible, reCAPTCHA is NOT verified
+                            if (style.display !== 'none' && style.visibility !== 'hidden' && style.opacity !== '0') {{
+                                const rect = iframe.getBoundingClientRect();
+                                if (rect.width > 0 && rect.height > 0) {{
+                                    return false; // Challenge is visible, not verified
+                                }}
+                            }}
+                        }}
+                        
+                        // Strategy: Check multiple ways to detect verification
+                        // 1. Check entire document for status message (most reliable)
+                        const statusEl = document.querySelector('#recaptcha-accessible-status, .rc-anchor-aria-status');
+                        if (statusEl) {{
+                            const statusText = (statusEl.textContent || statusEl.innerText || '').trim();
+                            if (statusText.toLowerCase().includes('verified') || 
+                                statusText.toLowerCase().includes('you are verified')) {{
+                                return true;
+                            }}
+                        }}
+                        
+                        // 2. Check entire document for verified checkbox
+                        const checkbox = document.querySelector('[id="recaptcha-anchor"], .recaptcha-checkbox, [role="checkbox"][id*="recaptcha"]');
+                        if (checkbox) {{
+                            const ariaChecked = checkbox.getAttribute('aria-checked');
+                            const hasCheckedClass = checkbox.classList.contains('recaptcha-checkbox-checked');
+                            const isUnchecked = checkbox.classList.contains('recaptcha-checkbox-unchecked');
+                            
+                            // If explicitly unchecked and not checked, not verified
+                            if (isUnchecked && ariaChecked !== 'true' && !hasCheckedClass) {{
+                                return false;
+                            }}
+                            
+                            // If checked (aria-checked="true" OR has checked class), it's verified
+                            if (ariaChecked === 'true' || hasCheckedClass) {{
+                                return true;
+                            }}
+                        }}
+                        
+                        // 3. Check if g-recaptcha-response textarea has a value (indicates verification)
+                        const responseTextarea = document.querySelector('textarea.g-recaptcha-response, textarea[name="g-recaptcha-response"]');
+                        if (responseTextarea && responseTextarea.value && responseTextarea.value.trim().length > 0) {{
+                            return true; // Has response token, likely verified
+                        }}
+                        
+                        // 4. Check within the element and its container (for when el is the container)
+                        // First, find the reCAPTCHA container (rc-anchor-container or parent with rc-anchor class)
+                        let container = el;
+                        if (!container.classList.contains('rc-anchor') && !container.id.includes('rc-anchor')) {{
+                            // Try to find parent container
+                            container = el.closest('.rc-anchor-container, .rc-anchor, [id*="rc-anchor"], .g-recaptcha');
+                            if (!container) container = el;
+                        }}
+                        
+                        // Check for checkbox in container
+                        const checkboxInContainer = container.querySelector('[id="recaptcha-anchor"], .recaptcha-checkbox, [role="checkbox"][id*="recaptcha"]');
+                        if (checkboxInContainer) {{
+                            const ariaChecked = checkboxInContainer.getAttribute('aria-checked');
+                            const hasCheckedClass = checkboxInContainer.classList.contains('recaptcha-checkbox-checked');
+                            if (ariaChecked === 'true' || hasCheckedClass) {{
+                                return true;
+                            }}
+                        }}
+                        
+                        // Check for status in container
+                        const statusInContainer = container.querySelector('#recaptcha-accessible-status, .rc-anchor-aria-status');
+                        if (statusInContainer) {{
+                            const statusText = (statusInContainer.textContent || statusInContainer.innerText || '').trim();
+                            if (statusText.toLowerCase().includes('verified') || 
+                                statusText.toLowerCase().includes('you are verified')) {{
+                                return true;
+                            }}
+                        }}
+                        
+                        // 5. Check element itself and parents for verification indicators
+                        let currentEl = el;
+                        let depth = 0;
+                        while (currentEl && currentEl !== document.body && depth < 15) {{
+                            // Check for checked class in this element
+                            const className = (currentEl.className || '').toString();
+                            if (className.includes('recaptcha-checkbox-checked')) {{
+                                return true;
+                            }}
+                            
+                            // Check for aria-checked="true" in this element
+                            if (currentEl.getAttribute && currentEl.getAttribute('aria-checked') === 'true') {{
+                                return true;
+                            }}
+                            
+                            // Check text content for verification message
+                            const text = (currentEl.textContent || currentEl.innerText || '').trim();
+                            if (text.toLowerCase().includes('you are verified')) {{
+                                return true;
+                            }}
+                            
+                            currentEl = currentEl.parentElement;
+                            depth++;
+                        }}
+                        
+                        return false;
+                    }}
+                    
+                    // Get all marked elements (elements with test ID attribute)
+                    const markedElements = document.querySelectorAll(`[${{testIdAttr}}]`);
+                    
+                    for (const el of markedElements) {{
+                        if (!isElementVisible(el)) {{
+                            continue;
+                        }}
+                        
+                        let isRecaptcha = false;
+                        let recaptchaIndicators = 0;
+                        
+                        // Check if element is a reCAPTCHA iframe (strongest indicator)
+                        if (el.tagName.toLowerCase() === 'iframe') {{
+                            const src = el.src || '';
+                            const title = el.title || '';
+                            if (src.includes('recaptcha') || 
+                                src.includes('google.com/recaptcha') ||
+                                title.toLowerCase().includes('recaptcha')) {{
+                                isRecaptcha = true; // iframe with recaptcha is definitive
+                            }}
+                        }}
+                        
+                        // Check for reCAPTCHA-specific classes (must be specific patterns)
+                        if (!isRecaptcha) {{
+                            const className = (el.className || '').toLowerCase();
+                            const id = (el.id || '').toLowerCase();
+                            const dataSitekey = el.getAttribute('data-sitekey');
+                            
+                            // Check for specific reCAPTCHA class patterns (not just any "recaptcha" substring)
+                            const recaptchaClassPatterns = [
+                                'recaptcha-checkbox',
+                                'recaptcha-anchor',
+                                'g-recaptcha',
+                                'rc-anchor',
+                                'rc-anchor-checkbox',
+                                'rc-anchor-normal',
+                                'rc-anchor-light',
+                                'rc-anchor-dark'
+                            ];
+                            
+                            const hasRecaptchaClass = recaptchaClassPatterns.some(pattern => 
+                                className.includes(pattern) || id.includes(pattern)
+                            );
+                            
+                            if (hasRecaptchaClass) {{
+                                recaptchaIndicators++;
+                            }}
+                            
+                            // data-sitekey is a strong indicator
+                            if (dataSitekey) {{
+                                recaptchaIndicators += 2; // Strong indicator
+                            }}
+                        }}
+                        
+                        // Check if element contains reCAPTCHA text (must be exact phrase)
+                        if (!isRecaptcha) {{
+                            const text = (el.innerText || el.textContent || '').toLowerCase();
+                            // Check for exact phrase, not just substring
+                            if (text.includes("i'm not a robot") || 
+                                text.includes("i am not a robot") ||
+                                text.includes("i'm not a robot.") ||
+                                text.includes("i am not a robot.")) {{
+                                recaptchaIndicators += 2; // Strong indicator
+                            }}
+                        }}
+                        
+                        // Check if element contains reCAPTCHA iframe as child (strong indicator)
+                        if (!isRecaptcha) {{
+                            const recaptchaIframe = el.querySelector('iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"], iframe[title*="recaptcha"]');
+                            if (recaptchaIframe && isElementVisible(recaptchaIframe)) {{
+                                recaptchaIndicators += 2; // Strong indicator
+                            }}
+                        }}
+                        
+                        // Check for reCAPTCHA checkbox element
+                        if (!isRecaptcha) {{
+                            const checkbox = el.querySelector('[id="recaptcha-anchor"], .recaptcha-checkbox, [role="checkbox"][id*="recaptcha-anchor"]');
+                            if (checkbox) {{
+                                recaptchaIndicators += 2; // Strong indicator
+                            }}
+                        }}
+                        
+                        // Require at least 2 indicators (or 1 strong indicator) to avoid false positives
+                        // Strong indicators count as 2, so we need at least 2 points
+                        if (!isRecaptcha && recaptchaIndicators >= 2) {{
+                            isRecaptcha = true;
+                        }}
+                        
+                        // If reCAPTCHA is found, check if it's already verified
+                        if (isRecaptcha) {{
+                            // If verified, don't pause - continue to next element
+                            if (isRecaptchaVerified(el)) {{
+                                continue; // Skip this verified reCAPTCHA
+                            }}
+                            // If not verified, return true to pause
+                            return true;
+                        }}
+                    }}
+                    
+                    return false;
+                }})('{self._test_id_attribute}');
+            """)
+            return bool(has_recaptcha)
+        except Exception as e:
+            logger.warning(f"Error detecting reCAPTCHA: {e}")
+            return False
+    
+    def pause_for_recaptcha(self):
+        """
+        Pause execution when reCAPTCHA is detected and wait for user to manually pass it.
+        """
+        if self.detect_recaptcha():
+            logger.warning("=" * 80)
+            logger.warning("reCAPTCHA DETECTED - Automation paused for manual intervention")
+            logger.warning("=" * 80)
+            logger.warning("Please manually complete the reCAPTCHA in the browser.")
+            logger.warning("The automation will resume automatically once reCAPTCHA is passed.")
+            logger.warning("=" * 80)
+            
+            # Wait for reCAPTCHA to be completed
+            # Check every 2 seconds if reCAPTCHA is still present
+            max_wait_time = 300  # 5 minutes max wait
+            check_interval = 2  # Check every 2 seconds
+            elapsed_time = 0
+            
+            while elapsed_time < max_wait_time:
+                time.sleep(check_interval)
+                elapsed_time += check_interval
+                
+                if not self.detect_recaptcha():
+                    logger.info("reCAPTCHA appears to be completed. Resuming automation...")
+                    # Wait a bit more to ensure page has updated
+                    time.sleep(1)
+                    return
+                
+                # Log progress every 30 seconds
+                if elapsed_time % 30 == 0:
+                    logger.info(f"Still waiting for reCAPTCHA completion... ({elapsed_time}s elapsed)")
+            
+            logger.warning(f"Timeout waiting for reCAPTCHA completion after {max_wait_time}s. Continuing anyway...")
+    
     def pause_for_debug(self):
         """Pause execution for debugging"""
         try:
@@ -619,12 +912,19 @@ class SyncSeleniumManager(SyncWEBManager, SeleniumAutomator):
             logger.error(f"Error injecting profile button: {e}")
     
     def close(self):
-        """Close the browser and clean up resources"""
+        """
+        Properly close all Selenium resources in the correct order.
+        This ensures the browser and driver are properly cleaned up.
+        """
         try:
-            if self._driver:
-                self._driver.quit()
-        except Exception as e:
-            logger.error(f"Error closing browser: {e}")
+            if hasattr(self, '_driver') and self._driver:
+                try:
+                    self._driver.quit()
+                    logger.debug("Selenium driver closed successfully")
+                except Exception as e:
+                    logger.debug(f"Error closing driver: {e}")
+        except Exception:
+            pass
             
     def is_browser_available(self) -> bool:
         """Check if the browser/page is still available and responsive."""
