@@ -1,8 +1,10 @@
 (([description, enableSpeech]) => {
+    // Remove any existing decision-making overlays (both legacy and current IDs)
     let existing = document.getElementById('webagent-task-desc');
-    if (existing) {
-        existing.remove();
-    }
+    if (existing) existing.remove();
+    let legacy = document.getElementById('browsergym-task-desc');
+    if (legacy) legacy.remove();
+
     let div = document.createElement('div');
     div.id = 'webagent-task-desc';
     div.setAttribute('developer_elem', ''); 
@@ -24,6 +26,7 @@
     div.style.wordBreak = 'break-word';
     div.style.whiteSpace = 'pre-line';
     document.body.appendChild(div);
+    
     // Speech synthesis (optional)
     if (enableSpeech && 'speechSynthesis' in window) {
         // Cancel any ongoing speech
@@ -31,7 +34,7 @@
         const utter = new window.SpeechSynthesisUtterance(description);
         utter.rate = 1;
         utter.pitch = 1;
-        utter.volume = 0;
+        utter.volume = 1;
         // Try to select a more natural voice
         const voices = window.speechSynthesis.getVoices();
         const preferredVoice = voices.find(v => v.name === 'Google US English') ||

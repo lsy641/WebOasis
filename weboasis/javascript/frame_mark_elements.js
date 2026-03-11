@@ -23,56 +23,37 @@ async ([parent_bid, bid_attr_name]) => {
     ]);
     // set_of_marks_tags removed - no longer used
 
-    let is_first_visit = false;
+    let first_visit = false;
     // if no yet set, set the frame (local) element counter to 0
-    if (!("webagent_elem_counter" in window)) {
-        window.webagent_elem_counter = 0;
-        window.webagent_frame_id_generator = new IFrameIdGenerator();
-        is_first_visit = true;
+    if (!("dom_elem_counter" in window)) {
+        window.dom_elem_counter = 0;
+        window.dom_frame_id_generator = new IFrameIdGenerator();
+        first_visit = true;
     }
 
     let all_bids = new Set();
-
-    // get all DOM elements in the current frame (does not include elements in shadowDOMs)
-    let [elementCountBefore, processedCount] = processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit, html_tags);
-    console.log(`WebAgent: Initially processed ${processedCount} elements`);
-    console.log(`WebAgent: Found ${elementCountBefore} elements before processing`);
-    // console.log(`WebAgent: Initially processed ${processedCount} elements`);
-
-    // Retry loop: keep checking for new elements until no difference in length
-    let retryCount = 1;
-    const maxRetries = 2;
-    const maxWaitTime = 2000; // Maximum 2 seconds to wait
-    
-    while (retryCount < maxRetries) {
-        console.log(`WebAgent: Retry ${retryCount + 1}/${maxRetries}, element count: ${elementCountBefore}`);
-        
-        // Use built-in MutationObserver for smart waiting
-        const elementCountAfter = await waitForElementChanges(elementCountBefore, maxWaitTime);
-        console.log(`WebAgent: After waiting, element count: ${elementCountAfter}`);
-        
-        // If no new elements, we're done
-        if (elementCountAfter === elementCountBefore) {
-            console.log('WebAgent: No new elements detected, retry complete');
-            break;
-        }
-        
-        // Process new elements that appeared during the wait
-        const newElementsCount = elementCountAfter - elementCountBefore;
-        console.log(`WebAgent: Found ${newElementsCount} new elements, processing them...`);
-        
-        // Process new elements using the same logic as the main loop
-        [elementCountBefore, processedCount] = processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit, html_tags);
-        
-        console.log(`WebAgent: Processed ${processedCount} new elements in retry ${retryCount + 1}`);
-        retryCount++;
-    }
-    
-    // console.log(`WebAgent: Retry loop complete after ${retryCount} attempts`);
-
     warning_msgs = new Array();
 
-    // wait for chat-like interfaces to be loaded (chatbot, chat window, etc.)
+    // CRITICAL: Wait for page stability BEFORE processing elements
+    // This prevents issues with dynamic content (chat windows, forms, etc.) that are still loading
+    // and avoids triggering Chrome extension message errors when modifying input values
+    
+    // Step 1: Wait for DOM to be ready
+    if (document.readyState !== 'complete') {
+        await new Promise(resolve => {
+            if (document.readyState === 'complete') {
+                resolve();
+            } else {
+                window.addEventListener('load', resolve, { once: true });
+                // Fallback timeout
+                setTimeout(resolve, 5000);
+        }
+        });
+    }
+    
+    // Step 2: Wait for chat-like interfaces to stabilize BEFORE processing elements
+    // This is critical - chat windows often load messages dynamically, and we don't want
+    // to modify input values while messages are still loading (which triggers Chrome extension errors)
     const chatSelectors = [
         'div#chatWindow',
         'div#chatbot', 
@@ -87,39 +68,169 @@ async ([parent_bid, bid_attr_name]) => {
     for (const selector of chatSelectors) {
         chatWindow = document.querySelector(selector);
         if (chatWindow) {
-            console.log(`WebAgent: Found chat interface: ${selector}`);
             break;
         }
     }
     
     if (chatWindow) {
-        // Dynamic waiting: wait until no new messages for 3 seconds, up to a max of 15 seconds
-        let lastMutationTime = Date.now();
-        const inactivityThreshold = 3000; // ms to wait after last message
-        const maxWait = 15000; // ms, absolute max wait
+        // Dynamic waiting: wait until no new messages AND text content is stable
+        const thresholds = {
+            inactivity: 3000,      // ms to wait after last message
+            textStability: 2000,    // ms to wait after last text content change
+            maxWait: 10000,         // ms, absolute max wait
+            checkInterval: 100      // ms between checks
+        };
+        
+        const state = {
+            lastMutationTime: Date.now(),
+            lastTextContent: chatWindow.textContent || '',
+            lastTextChangeTime: Date.now(),
+            startTime: Date.now()
+        };
     
+        // Update state on mutations
         const mutation_observer = new MutationObserver(() => {
-            lastMutationTime = Date.now();
+            state.lastMutationTime = Date.now();
+            const currentText = chatWindow.textContent || '';
+            if (currentText !== state.lastTextContent) {
+                state.lastTextContent = currentText;
+                state.lastTextChangeTime = Date.now();
+            }
         });
-        mutation_observer.observe(chatWindow, { childList: true, subtree: true });
+        mutation_observer.observe(chatWindow, { 
+            childList: true, 
+            subtree: true, 
+            characterData: true,
+            attributes: false
+        });
     
-        // Wait until no new messages for inactivityThreshold, or maxWait reached
+        // Check stability conditions
+        const checkStability = () => {
+            const now = Date.now();
+            const times = {
+                sinceMutation: now - state.lastMutationTime,
+                sinceTextChange: now - state.lastTextChangeTime,
+                total: now - state.startTime
+            };
+            
+            // Check for active animations
+            const hasActiveAnimations = () => {
+                for (const el of chatWindow.querySelectorAll('*')) {
+                    const style = window.getComputedStyle(el);
+                    if ((style.animationName !== 'none' && style.animationPlayState !== 'paused') ||
+                        (style.transitionProperty !== 'none' && parseFloat(style.transitionDuration) > 0)) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            
+            // Check for typing indicators
+            const typingSelectors = ['[class*="typing" i]', '[id*="typing" i]', '[aria-label*="typing" i]'];
+            const hasTypingIndicator = typingSelectors.some(sel => {
+                try { return chatWindow.querySelector(sel); } catch { return false; }
+            });
+            
+            return {
+                mutationsStable: times.sinceMutation > thresholds.inactivity,
+                textStable: times.sinceTextChange > thresholds.textStability,
+                noAnimations: !hasActiveAnimations(),
+                noTypingIndicator: !hasTypingIndicator,
+                times
+            };
+        };
+    
+        // Wait until all conditions are met
         await new Promise(resolve => {
             const check = () => {
-                if (Date.now() - lastMutationTime > inactivityThreshold) {
+                const stability = checkStability();
+                const allStable = stability.mutationsStable && stability.textStable && 
+                                  stability.noAnimations && stability.noTypingIndicator;
+                
+                if (allStable) {
                     mutation_observer.disconnect();
                     resolve();
-                } else if (Date.now() - lastMutationTime > maxWait) {
+                } else if (stability.times.total > thresholds.maxWait) {
                     mutation_observer.disconnect();
                     resolve();
                 } else {
-                    setTimeout(check, 200);
+                    setTimeout(check, thresholds.checkInterval);
                 }
             };
             check();
         });
     }
-    // After chatWindow waiting logic
+    
+    // Step 3: Wait for general DOM stability (no rapid changes)
+    // This catches any other dynamic content that might still be loading
+    await new Promise(resolve => {
+        let timeoutId;
+        let lastChangeTime = Date.now();
+        const checkIdle = () => {
+            lastChangeTime = Date.now();
+            clearTimeout(timeoutId);
+            timeoutId = setTimeout(() => {
+                const idleTime = Date.now() - lastChangeTime;
+                if (idleTime >= 500) {
+                    console.log(`DOM stabilized after ${idleTime}ms of inactivity`);
+                    observer.disconnect();
+                    resolve();
+                }
+            }, 500); // Wait 500ms of inactivity
+        };
+        // Start checking immediately
+        checkIdle();
+        // Also check on any DOM changes
+        const observer = new MutationObserver(checkIdle);
+        observer.observe(document.body, { childList: true, subtree: true });
+        // Fallback: resolve after max wait time
+        setTimeout(() => {
+            observer.disconnect();
+            clearTimeout(timeoutId);
+            resolve();
+        }, 2000); // Max 2 seconds wait for general stability
+    });
+    
+    console.log('Page stability checks complete, starting element processing...');
+    
+    // NOW process elements after page is stable
+    // get all DOM elements in the current frame (does not include elements in shadowDOMs)
+    let [elementCountBefore, processedCount] = processNewElements(bid_attr_name, parent_bid, all_bids, first_visit, html_tags);
+    console.log(`Initially processed ${processedCount} elements`);
+    console.log(`Found ${elementCountBefore} elements before processing`);
+
+    // Retry loop: keep checking for new elements until no difference in length
+    let retryCount = 1;
+    const maxRetries = 2;
+    const maxWaitTime = 2000; // Maximum 2 seconds to wait
+    
+    while (retryCount < maxRetries) {
+        console.log(`Retry ${retryCount + 1}/${maxRetries}, element count: ${elementCountBefore}`);
+        
+        // Use built-in MutationObserver for smart waiting
+        const elementCountAfter = await waitForElementChanges(elementCountBefore, maxWaitTime);
+        console.log(`After waiting, element count: ${elementCountAfter}`);
+        
+        // If no new elements, we're done
+        if (elementCountAfter === elementCountBefore) {
+            console.log('No new elements detected, retry complete');
+            break;
+        }
+        
+        // Process new elements that appeared during the wait
+        const newElementsCount = elementCountAfter - elementCountBefore;
+        console.log(`Found ${newElementsCount} new elements, processing them...`);
+
+        // Process new elements using the same logic as the main loop
+        [elementCountBefore, processedCount] = processNewElements(bid_attr_name, parent_bid, all_bids, first_visit, html_tags);
+        
+        console.log(`Processed ${processedCount} new elements in retry ${retryCount + 1}`);
+        retryCount++;
+    }
+    
+    console.log(`Element processing complete after ${retryCount} attempts`);
+
+    // Handle video transcript collection (after elements are processed)
     const video = document.querySelector('video');
     let transcript = "";
     if (video && isVideoPlaying(video)) {
@@ -232,12 +343,9 @@ class IFrameIdGenerator {
 
 
 
-function processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit=false, html_tags) {
-    console.log('WebAgent: processNewElements called with:', {bid_attr_name, parent_bid, all_bids, is_first_visit});
-    console.log('WebAgent: html_tags available:', html_tags ? 'YES' : 'NO', 'Size:', html_tags ? html_tags.size : 'undefined');
+function processNewElements(bid_attr_name, parent_bid, all_bids, first_visit=false, html_tags) {
     let elements = Array.from(document.querySelectorAll('*'));
     let elementCountBefore = elements.length;
-    console.log('WebAgent: Found', elements.length, 'elements');
     let i = 0;
     let processedCount = 0;
     
@@ -266,20 +374,59 @@ function processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit=
         
         // Processing element
         // write dynamic element values to the DOM
-        if (typeof elem.value !== 'undefined') {
-            elem.setAttribute("value", elem.value);
+        // IMPORTANT: Avoid modifying input/textarea elements to prevent triggering website event handlers
+        // that manage form state (like enabling/disabling submit buttons). Modifying the value attribute
+        // can trigger mutation observers or event handlers that disable form elements.
+        // We skip modifying value attributes on form elements entirely to avoid interfering with website behavior.
+        const isFormElement = (elem.tagName && ['INPUT', 'TEXTAREA'].includes(elem.tagName.toUpperCase()));
+        const isFocusedInput = document.activeElement === elem && typeof elem.value !== 'undefined';
+        
+        // Skip modifying value attribute on form elements to avoid triggering website's form state management
+        // The website's JavaScript may listen for attribute changes and disable form elements as a result
+        if (typeof elem.value !== 'undefined' && !isFormElement && !isFocusedInput) {
+            // Only modify value attribute for non-form elements (like output, etc.)
+            const currentAttrValue = elem.getAttribute("value");
+            const currentPropValue = String(elem.value || "");
+            // Only update if different to avoid triggering input events unnecessarily
+            if (currentAttrValue !== currentPropValue) {
+                try {
+                    const originalValue = elem.value;
+                    // Set attribute - this might trigger events, but we've skipped form elements
+                    elem.setAttribute("value", currentPropValue);
+                    // Restore the actual value property if it was changed by setAttribute
+                    // (some browsers sync value property when attribute changes)
+                    if (elem.value !== originalValue) {
+                        elem.value = originalValue;
+                    }
+                } catch (e) {
+                    // Silently ignore errors - attribute setting is best-effort
+                    // Log only in debug mode to avoid console spam
+                    if (console.debug) {
+                        console.debug('Could not set value attribute:', e);
+                    }
+                }
+            }
         }
         // write dynamic checked properties to the DOM
         if (typeof elem.checked !== 'undefined') {
-            if (elem.checked === true) {
-                elem.setAttribute("checked", "");
+            const currentCheckedAttr = elem.hasAttribute("checked");
+            if (elem.checked === true && !currentCheckedAttr) {
+                try {
+                    elem.setAttribute("checked", "");
+                } catch (e) {
+                    console.debug('Could not set checked attribute:', e);
+                }
             }
-            else {
-                elem.removeAttribute("checked");
+            else if (elem.checked === false && currentCheckedAttr) {
+                try {
+                    elem.removeAttribute("checked");
+                } catch (e) {
+                    console.debug('Could not remove checked attribute:', e);
+                }
             }
         }
         
-        // add the element global id (webagent id) to a custom HTML attribute
+        // add the element global id to a custom HTML attribute
         // https://playwright.dev/docs/locators#locate-by-test-id
         // recover the element id if it has one already, else compute a new element id
         let elem_global_bid = null;
@@ -287,14 +434,14 @@ function processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit=
         // iFrames get alphabetical ids: 'a', 'b', ..., 'z'.
         // if more than 26 iFrames are present, raise an Error
         if (['iframe', 'frame'].includes(elem.tagName.toLowerCase())) {
-            elem_local_id = `${window.webagent_frame_id_generator.next()}`;
+            elem_local_id = `${window.dom_frame_id_generator.next()}`;
             if (elem_local_id.length > 1) {
-                throw new Error(`More than 26 iFrames. WebAgent not like.`);
+                throw new Error(`Maximum 26 iframes supported.`);
             }
         }
         // other elements get numerical ids: '0', '1', '2', ...
         else {
-            elem_local_id = `${window.webagent_elem_counter++}`;
+            elem_local_id = `${window.dom_elem_counter++}`;
         }
         if (parent_bid == "") {
             elem_global_bid = `${elem_local_id}`;
@@ -319,7 +466,7 @@ function processNewElements(bid_attr_name, parent_bid, all_bids, is_first_visit=
         processedCount++;
     }
     
-    console.log('WebAgent: processNewElements finished, processed', processedCount, 'elements');
+    console.log('processNewElements finished, processed', processedCount, 'elements');
     return [elementCountBefore, processedCount];
 }
 
@@ -336,7 +483,6 @@ async function waitForElementChanges(initialCount, maxWaitTime) {
         timeoutId = setTimeout(() => {
             if (observer) observer.disconnect();
             const finalCount = document.querySelectorAll('*').length;
-            console.log(`WebAgent: Timeout reached, final element count: ${finalCount}`);
             resolve(finalCount);
         }, maxWaitTime);
         
@@ -348,7 +494,6 @@ async function waitForElementChanges(initialCount, maxWaitTime) {
             if (currentCount !== initialCount) {
                 clearTimeout(timeoutId);
                 observer.disconnect();
-                console.log(`WebAgent: Elements changed via MutationObserver (${initialCount} → ${currentCount})`);
                 resolve(currentCount);
             }
         });
@@ -361,7 +506,7 @@ async function waitForElementChanges(initialCount, maxWaitTime) {
             characterData: false  // Don't watch text changes
         });
     });
-}
+  }
 
 function isVideoPlaying(video) {
     return !!(video && !video.paused && !video.ended && video.readyState > 2);
