@@ -21,7 +21,7 @@ Handling "Any site. Any page. Any UI. Any complexity" for your web tasks and com
 
 
 
-WebOasis is a framework for building AI-driven web agents on real, complex websites. 
+
 
 ## Updates
 
