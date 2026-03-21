@@ -85,7 +85,8 @@
         // targets and confuse the web agent if treated as interactive.
         const conditionalInteractiveTags = [
             'summary', 'details', 'dialog', 'option', 'img',  // Secondary interactive elements
-            'fieldset', 'datalist', 'output', 'menu'          // Container elements
+            'fieldset', 'datalist', 'output', 'menu',          // Container elements
+            'td'
         ];
         
         // Check if element has more specific interactive children
@@ -558,8 +559,20 @@
         const threshold = 0.8; // 50% visibility threshold
         return visibilityRatio >= threshold;
     }
-
-
+    
+    // Helper to decide if a child is a "viable" interactive replacement for its parent.
+    // We only want to drop a parent in favor of children that are themselves interactive
+    // AND would survive our visibility/overlap filters. This prevents cases where all
+    // children are effectively non-clickable (e.g., tiny/overlapped spans), in which
+    // case we should keep the parent as the best interactive target.
+    function isInteractiveChildViable(child) {
+        if (!child) return false;
+        if (!isInteractive(child)) return false;
+        if (!isElementFullyVisible(child)) return false;
+        if (!isElementNotOverlapped(child)) return false;
+        return true;
+    }
+    
     function isElementFullyVisible(element) {
         const rect = element.getBoundingClientRect();
         const style = window.getComputedStyle(element);
@@ -749,7 +762,9 @@
                                 ].join(', ');
                                 const interactiveChildren = element.querySelectorAll(interactiveRolesSelector);
                                 const hasInteractiveChildrenWithTestId = Array.from(interactiveChildren).some(child => {
-                                    return child.hasAttribute(webagentIdAttribute) && child.getAttribute(webagentIdAttribute);
+                                    return child.hasAttribute(webagentIdAttribute) &&
+                                           child.getAttribute(webagentIdAttribute) &&
+                                           isInteractiveChildViable(child);
                                 });
                                 if (hasInteractiveChildrenWithTestId) {
                                     return null; // Filter out label that contains interactive children
@@ -769,7 +784,9 @@
                         ].join(', ');
                         const interactiveChildren = element.querySelectorAll(interactiveRolesSelector);
                         const hasInteractiveChildrenWithTestId = Array.from(interactiveChildren).some(child => {
-                            return child.hasAttribute(webagentIdAttribute) && child.getAttribute(webagentIdAttribute);
+                            return child.hasAttribute(webagentIdAttribute) &&
+                                   child.getAttribute(webagentIdAttribute) &&
+                                   isInteractiveChildViable(child);
                         });
                         if (hasInteractiveChildrenWithTestId) {
                             return null; // Filter out label that contains interactive children
@@ -1052,8 +1069,11 @@
             ].join(', ');
             const interactiveChildren = xElem.querySelectorAll(interactiveRolesSelector);
             // Check if any of the interactive children have the test_id attribute (they're in our scope)
+            // AND are themselves viable interactive targets (i.e., would not be filtered out later).
             const hasInteractiveChildrenWithTestId = Array.from(interactiveChildren).some(child => {
-                return child.hasAttribute(webagentIdAttribute) && child.getAttribute(webagentIdAttribute);
+                return child.hasAttribute(webagentIdAttribute) &&
+                       child.getAttribute(webagentIdAttribute) &&
+                       isInteractiveChildViable(child);
             });
             if (hasInteractiveChildrenWithTestId) {
                 return false; // Filter out parent - children should be identified instead
